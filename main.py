@@ -1,43 +1,29 @@
 import matplotlib.pyplot as plt
 import numpy as np
-
+import pyvista as pv
 from heightmap import MAX_HEIGHT, generate_heightmap
 
 
 def show_heightmap(heightmap: np.ndarray) -> None:
-    """Draw each cell as a block column colored by its discrete height."""
-    n = heightmap.shape[0]
-    xs, ys = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-    heights = heightmap.ravel()
-    colors = plt.cm.terrain(0.35 + 0.65 * (heights - 1) / (MAX_HEIGHT - 1))
+    x, y, z = heightmap.shape[0], heightmap.shape[1], heightmap.max()
 
-    fig = plt.figure(figsize=(8, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    ax.bar3d(
-        xs.ravel(),
-        ys.ravel(),
-        np.zeros_like(heights),
-        1,
-        1,
-        heights,
-        color=colors,
-        shade=True,
-        edgecolor="black",
-        linewidth=0.2,
-    )
-    ax.set_xlim(0, n)
-    ax.set_ylim(0, n)
-    ax.set_zlim(0, MAX_HEIGHT)
-    ax.set_xlabel("x")
-    ax.set_ylabel("z")
-    ax.set_zlabel("height")
-    ax.set_title("16x16 block heightmap")
-    ax.view_init(elev=35, azim=-60)
-    plt.tight_layout()
-    plt.show()
+    # Layers of each height
+    layers = np.arange(z)[None, None, :]
 
+    # Turn 2d height map into 3d voxel map (True if the cell is non-empty, False if empty)
+    voxel_map = layers < heightmap[..., None]
 
-rng = np.random.default_rng(100)
-heightmap = generate_heightmap(16, rng)
-print(heightmap, flush=True)
-show_heightmap(heightmap)
+    grid = pv.ImageData(dimensions=(x + 1, y + 1, z + 1))
+
+    # -1 if the current grid is empty at a height layer (ex. if a grid has height 1, then layer1 = 1 and layer2 = -1, etc...)
+    grid.cell_data["height"] = np.where(voxel_map, layers, -1).ravel(order="F")
+
+    # Remove all the empty cells
+    blocks = grid.threshold(0)
+    blocks.plot(show_edges=False, cmap="gray")
+
+if __name__ == "__main__":
+    rng = np.random.default_rng(100)
+    heightmap = generate_heightmap(16, rng)
+    print(heightmap, flush=True)
+    show_heightmap(heightmap)

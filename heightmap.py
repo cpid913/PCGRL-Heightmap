@@ -4,8 +4,8 @@ from scipy.special import expit
 # Close to Minecraft's octave stack, sized for a 16x16 block map.
 # Four layers: each one is twice as fine and half as strong as the last.
 # A fifth octave starts flickering between neighboring blocks.
-OCTAVES = 4
-PERSISTENCE = 0.5
+OCTAVES = 5
+PERSISTENCE = 0.99
 LACUNARITY = 2.0
 BASE_FREQUENCY = 1.0
 CONTRAST = 1.0
