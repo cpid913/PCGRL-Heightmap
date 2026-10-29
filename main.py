@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 from heightmap import MAX_HEIGHT, generate_heightmap
-from path_finding import Astar
+from path_finding import Astar, floodfill_heuristic, floodfill
 
 
 def show_heightmap(heightmap, area, start: tuple, goal: tuple) -> None:
@@ -55,15 +55,37 @@ def show_heightmap(heightmap, area, start: tuple, goal: tuple) -> None:
 
 if __name__ == "__main__":
     rng = np.random.default_rng(100)
-    heightmap = generate_heightmap(16, rng)
 
-    start, goal = (6, 2), (8, 15)
+    heightmap = np.array([
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1],
+        [1, 1, 3, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1],
+        [1, 1, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 3, 3, 3, 1, 1, 3, 3, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 3, 3, 1, 1],
+        [1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 3, 1, 1],
+        [1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1, 1],
+        [1, 1, 1, 1, 3, 3, 3, 3, 3, 3, 3, 3, 3, 1, 1, 1],
+        [1, 1, 1, 1, 1, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1],
+        [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    ])
+    heightmap = generate_heightmap(16, rng)
+    print(heightmap, flush=True)
+
+    start, goal = (4, 4), (12, 12)
     path, area = Astar(heightmap, start, goal)
 
     if path:
         print(f"Path found ({len(path) - 1} steps)\n")
+        # Comment out both to get results for just A*
+        area = floodfill_heuristic(heightmap, start, goal, len(path)) # Comment out this to get results for floodfill with heuristic
+        area = floodfill(heightmap, start, goal)  # Comment out this to get results for floodfill
+        show_heightmap(heightmap, area, start, goal)
     else:
         print("No path found.")
 
-    print(heightmap, flush=True)
-    show_heightmap(heightmap, area, start, goal)

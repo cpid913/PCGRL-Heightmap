@@ -63,7 +63,7 @@ def Astar(heightmap, start, goal):
                 f = next_g + heuristic(nb, goal)
                 heapq.heappush(search_heap, (f, next_g, nb))
 
-    return None
+    return None, None
 
 '''
 Get the path
@@ -72,3 +72,72 @@ def reconstruct(came_from, current):
     if current not in came_from:
         return [current]
     return reconstruct(came_from, came_from[current]) + [current]
+
+'''
+Floodfill that stops when reaches the main quest (maybe try a different stopping condition?)
+'''
+def floodfill(heightmap, start, goal):
+    # The search heap that pops the cell with the smallest heuristic score
+    current_step = {start}
+    stop = False
+    visited = set()
+    step_count = 0
+
+    # Loop until the stopping criteria is met
+    while not stop and current_step:
+        new_step = set()
+        for current in current_step:
+            # Skip visited cell
+            if current in visited:
+                continue
+            # Stop the loop if the goal is reached
+            if current == goal:
+                visited.add(current)
+                stop = True
+
+            visited.add(current)
+
+            for nb in get_neighbors(heightmap, current):
+                # Skip visited cell
+                if nb in visited:
+                    continue
+                new_step.add(nb)
+
+        current_step = new_step
+        step_count += 1
+    print(f'Floodfill steps: {step_count}')
+
+    return visited
+
+'''
+Floodfill but with heuristic
+'''
+def floodfill_heuristic(heightmap, start, goal, shortest_len):
+    # The search heap that pops the cell with the smallest heuristic score
+    search_heap = [(heuristic(start, goal), 0, start)]
+
+    # This dictionary stores the path length between each cell and the start point
+    g_dict = {start: 0}
+
+    visited = set()
+
+    while search_heap:
+        _, g, current = heapq.heappop(search_heap)
+        # Skip visited cell
+        if current in visited:
+            continue
+
+        visited.add(current)
+
+        for nb in get_neighbors(heightmap, current):
+            # Skip visited cell
+            if nb in visited:
+                continue
+            next_g = g + 1
+            if next_g < g_dict.get(nb, float("inf")):
+                g_dict[nb] = next_g
+                f = next_g + heuristic(nb, goal)
+                if f < shortest_len + 2:
+                    heapq.heappush(search_heap, (f, next_g, nb))
+
+    return visited
