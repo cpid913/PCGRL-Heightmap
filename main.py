@@ -3,9 +3,10 @@ import numpy as np
 import pyvista as pv
 from heightmap import MAX_HEIGHT, generate_heightmap
 from path_finding import Astar, floodfill_heuristic, floodfill
+from quest_placement import place_quests
 
 
-def show_heightmap(heightmap, area, start: tuple, goal: tuple) -> None:
+def show_heightmap(heightmap, area, start: tuple, goal: tuple, side_quests=()) -> None:
     x, y, z = heightmap.shape[0], heightmap.shape[1], heightmap.max()
 
     # A binary map of whether the current grid is explored
@@ -14,6 +15,8 @@ def show_heightmap(heightmap, area, start: tuple, goal: tuple) -> None:
         highlight[i, j] = True
 
     dots = {start: "yellow", goal: "red"}
+    for cell in side_quests:
+        dots[cell] = "blue"
 
     # Layers of each height
     layers = np.arange(z)[None, None, :]
@@ -77,7 +80,8 @@ if __name__ == "__main__":
     heightmap = generate_heightmap(16, rng)
     print(heightmap, flush=True)
 
-    start, goal = (4, 4), (12, 12)
+    start, goal, side_quests = place_quests(heightmap, rng)
+    print(f"Spawn: {start}, main quest: {goal}, side quests: {side_quests}")
     path, area = Astar(heightmap, start, goal)
 
     if path:
@@ -85,7 +89,7 @@ if __name__ == "__main__":
         # Comment out both to get results for just A*
         area = floodfill_heuristic(heightmap, start, goal, len(path)) # Comment out this to get results for floodfill with heuristic
         area = floodfill(heightmap, start, goal)  # Comment out this to get results for floodfill
-        show_heightmap(heightmap, area, start, goal)
+        show_heightmap(heightmap, area, start, goal, side_quests)
     else:
         print("No path found.")
 
