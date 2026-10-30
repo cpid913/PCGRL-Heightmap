@@ -74,9 +74,37 @@ def reconstruct(came_from, current):
     return reconstruct(came_from, came_from[current]) + [current]
 
 '''
+Floodfill that tries to cover the whole map
+'''
+def floodfill(heightmap, start):
+    # The search heap that pops the cell with the smallest heuristic score
+    current_step = {start}
+    visited = set()
+
+    # Loop until the stopping criteria is met
+    while current_step:
+        new_step = set()
+        for current in current_step:
+            # Skip visited cell
+            if current in visited:
+                continue
+
+            visited.add(current)
+
+            for nb in get_neighbors(heightmap, current):
+                # Skip visited cell
+                if nb in visited:
+                    continue
+                new_step.add(nb)
+
+        current_step = new_step
+
+    return visited
+
+'''
 Floodfill that stops when reaches the main quest (maybe try a different stopping condition?)
 '''
-def floodfill(heightmap, start, goal):
+def floodfill_stop(heightmap, start, goal):
     # The search heap that pops the cell with the smallest heuristic score
     current_step = {start}
     stop = False
