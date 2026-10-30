@@ -1,0 +1,13 @@
+_pycache_/
+*pycache*
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+*.pyz
+*.pywz
+*.pyzw
+*.pyz
