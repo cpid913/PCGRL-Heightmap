@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 from heightmap import MAX_HEIGHT, generate_heightmap
-from path_finding import Astar, floodfill_heuristic, floodfill
+from path_finding import Astar, floodfill_heuristic, floodfill, floodfill_stop
 from quest_placement import place_quests
 
 
@@ -88,7 +88,8 @@ if __name__ == "__main__":
         print(f"Path found ({len(path) - 1} steps)\n")
         # Comment out both to get results for just A*
         area = floodfill_heuristic(heightmap, start, goal, len(path)) # Comment out this to get results for floodfill with heuristic
-        area = floodfill(heightmap, start, goal)  # Comment out this to get results for floodfill
+        area = floodfill_stop(heightmap, start, goal)  # stops at the main quest
+        # area = floodfill(heightmap, start)  # walks every cell reachable from spawn
         show_heightmap(heightmap, area, start, goal, side_quests)
     else:
         print("No path found.")
