@@ -133,7 +133,6 @@ def floodfill_stop(heightmap, start, goal):
 
         current_step = new_step
         step_count += 1
-    print(f'Floodfill steps: {step_count}')
 
     return visited
 

@@ -4,7 +4,7 @@ import os
 import numpy as np
 import pyvista as pv
 
-from path_finding import floodfill
+from path_finding import floodfill, floodfill_stop
 
 PAGE = 12
 
@@ -27,7 +27,7 @@ def load_maps():
         main_quest = tuple(raw["main_quest"])
         side_quests = [tuple(cell) for cell in raw["side_quests"]]
 
-        visited = floodfill(heightmap, spawn)
+        visited = floodfill_stop(heightmap, spawn, main_quest)
         reached_sides = [cell for cell in side_quests if cell in visited]
 
         batch.append({
