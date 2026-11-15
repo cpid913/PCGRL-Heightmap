@@ -39,7 +39,7 @@ class Args:
     """whether to capture videos of the agent performances (check out `videos` folder)"""
 
     # Algorithm specific arguments
-    env_id: str = "CartPole-v1"
+    env_id: str = "Heightmap"
     """the id of the environment"""
     total_timesteps: int = 500000
     """total timesteps of the experiments"""
@@ -67,6 +67,8 @@ class Args:
     """the maximum norm for the gradient clipping"""
     q_lambda: float = 0.65
     """the lambda for Q(lambda)"""
+    eval_fraction: float = 0.2
+    """fraction of maps held out for evaluation after training"""
 
 
 def make_env(env_id, maps, seed, idx, capture_video, run_name):
@@ -121,6 +123,32 @@ def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     return max(slope * t + start_e, end_e)
 
 
+def evaluate(q_network, eval_maps, device):
+    """Run one greedy (epsilon = 0) episode on every eval map. Returns a list of per-map results."""
+    env = PQNEnv(eval_maps)
+    q_network.eval()
+    results = []
+    for map_idx in range(len(eval_maps)):
+        obs, _ = env.reset(options={"map_idx": map_idx})
+        episodic_return, length, done = 0.0, 0, False
+        while not done:
+            with torch.no_grad():
+                q_values = q_network(torch.Tensor(obs).unsqueeze(0).to(device))
+            action = int(torch.argmax(q_values, dim=1).item())
+            obs, reward, terminated, truncated, _ = env.step(action)
+            episodic_return += reward
+            length += 1
+            done = terminated or truncated
+        results.append({
+            "map_id": eval_maps[map_idx]["id"],
+            "return": episodic_return,
+            "length": length,
+            "terminated": bool(terminated),
+        })
+    q_network.train()
+    return results
+
+
 if __name__ == "__main__":
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -153,10 +181,18 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
+    # Train/eval split: shuffle once with the run seed, hold out eval_fraction of the maps
     maps = load_maps()
+    perm = np.random.default_rng(args.seed).permutation(len(maps))
+    num_eval = max(1, int(round(len(maps) * args.eval_fraction)))
+    eval_maps = [maps[i] for i in perm[:num_eval]]
+    train_maps = [maps[i] for i in perm[num_eval:]]
+    print(f"maps: {len(train_maps)} train / {len(eval_maps)} eval")
+    writer.add_text("eval_map_ids", ", ".join(str(m["id"]) for m in eval_maps))
+
     # env setup
     envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, maps, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
+        [make_env(args.env_id, train_maps, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
     )
     assert isinstance(envs.single_action_space, gym.spaces.Discrete), "only discrete action space is supported"
 
@@ -208,13 +244,15 @@ if __name__ == "__main__":
             next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
 
             if "final_info" in infos:
-                for info in infos["final_info"]:
+                for env_idx, info in enumerate(infos["final_info"]):
                     if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}")
+                        print(f"global_step={global_step}, episodic_return={info['episode']['r']}, "
+                              f"terminated={terminations[env_idx]}, truncated={truncations[env_idx]}")
                         writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
                         writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                        writer.add_scalar("charts/terminated", int(terminations[env_idx]), global_step)
 
-        # Compute Q(lambda) targets
+                        # Compute Q(lambda) targets
         with torch.no_grad():
             returns = torch.zeros_like(rewards).to(device)
             for t in reversed(range(args.num_steps)):
@@ -258,4 +296,25 @@ if __name__ == "__main__":
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
     envs.close()
+
+    # Save the trained model so it can be re-evaluated later
+    model_path = f"runs/{run_name}/model.pt"
+    torch.save(q_network.state_dict(), model_path)
+    print(f"model saved to {model_path}")
+
+    # Evaluate on held-out maps
+    results = evaluate(q_network, eval_maps, device)
+    for i, r in enumerate(results):
+        writer.add_scalar("eval/episodic_return", r["return"], i)
+        writer.add_scalar("eval/episodic_length", r["length"], i)
+        writer.add_scalar("eval/terminated", int(r["terminated"]), i)
+    success_rate = np.mean([r["terminated"] for r in results])
+    mean_return = np.mean([r["return"] for r in results])
+    mean_length = np.mean([r["length"] for r in results])
+    writer.add_scalar("eval/success_rate", success_rate, global_step)
+    writer.add_scalar("eval/mean_return", mean_return, global_step)
+    writer.add_scalar("eval/mean_length", mean_length, global_step)
+    print(f"EVAL on {len(results)} held-out maps: success_rate={success_rate:.2%}, "
+          f"mean_return={mean_return:.2f}, mean_length={mean_length:.1f}")
+
     writer.close()

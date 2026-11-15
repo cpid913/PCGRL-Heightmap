@@ -1,10 +1,14 @@
 import gymnasium as gym
 import numpy as np
 from path_finding import floodfill, floodfill_stop
+from main import show_heightmap
+'''
+Environment class for pqn (with template code generated from Claude)
+'''
 class PQNEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, maps, max_steps=200):
+    def __init__(self, maps, max_steps=1000):
         super().__init__()
         self.maps = maps
         self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(4,16,16), dtype=np.float32)
@@ -20,9 +24,16 @@ class PQNEnv(gym.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        idx = self.np_random.integers(len(self.maps))
+        # options={"map_idx": i} picks a specific map (used for evaluation); otherwise pick at random
+        if options is not None and "map_idx" in options:
+            idx = options["map_idx"]
+        else:
+            idx = self.np_random.integers(len(self.maps))
         self.current_map = self.maps[idx].copy()
-        self.current_heightmap = self.current_map["heightmap"]
+        # Store initial map for fianl comparison purpose
+        # Copy the heightmap so step() edits don't overwrite the original loaded map
+        self.current_heightmap = self.current_map["heightmap"].copy()
+        self.initial_heightmap = self.current_heightmap.copy()
         self.spawn = self.current_map["spawn"]
         self.main_quest = self.current_map["main_quest"]
         self.side_quests = self.current_map["side_quests"]
@@ -43,6 +54,12 @@ class PQNEnv(gym.Env):
 
         self.target_side_quests = self.current_map["demand"]
         self.t = 0
+
+        visited = floodfill_stop(self.current_heightmap, self.spawn, self.main_quest)
+        self.initial_visited = visited
+        reached_sides = [cell for cell in self.side_quests if cell in visited]
+        self.current_diff_side_quests = abs(self.target_side_quests - len(reached_sides))
+        self.current_main_reachable = self.current_map["main_reached"]
         return self._obs(), {"map_idx": int(idx)}
 
     def step(self, action):
@@ -59,12 +76,22 @@ class PQNEnv(gym.Env):
 
         visited = floodfill_stop(self.current_heightmap, self.spawn, self.main_quest)
         reached_sides = [cell for cell in self.side_quests if cell in visited]
-        # 1 if the main quest is not reachable, 0 if reachable
-        main_reachable = float(not (self.main_quest in visited))
-        reward = - abs(self.target_side_quests - len(reached_sides)) - 10 * main_reachable
+        main_reachable = float(self.main_quest in visited)
+        diff_side = abs(self.target_side_quests - len(reached_sides))
+        # Start calculating reward
+        reward = 0
+
+        # Reward if the number of side quests is closer to the target, penalize if the number of side quests is farther than the target
+        reward += (self.current_diff_side_quests - diff_side)
+        self.current_diff_side_quests = diff_side
+
+        # Reward if the current action made main quest reachable, penalize if the current action made main quest unreachable
+        if main_reachable != self.current_main_reachable:
+            reward += 10 if main_reachable else -10
+            self.current_main_reachable = main_reachable
         terminated = (abs(self.target_side_quests - len(reached_sides)) == 0) and (self.main_quest in visited)
         if terminated:
             reward += 10
-        truncated = self.t >= self.max_steps   # time limit, not a real terminal
+        truncated = self.t >= self.max_steps
 
         return self._obs(), reward, terminated, truncated, {}
