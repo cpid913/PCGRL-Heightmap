@@ -34,6 +34,8 @@ def roll_map(seed):
         spawn, main_quest, side_quests = place_quests(heightmap, rng)
     wanted = int(rng.integers(0, len(side_quests) + 1))
 
+    wanted = int(rng.integers(0, len(side_quests) + 1))
+
     walked = floodfill(heightmap, spawn)
     reached = [cell for cell in side_quests if cell in walked]
     main_reachable = main_quest in walked

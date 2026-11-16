@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pyvista as pv
 
-from path_finding import floodfill
+from path_finding import floodfill, floodfill_stop
 
 PAGE = 12
 
