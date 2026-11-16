@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 
 import numpy as np
 import pyvista as pv
@@ -9,11 +10,12 @@ from path_finding import floodfill
 PAGE = 12
 
 '''
-maps/1.json, maps/2.json, ... in number order.
+<folder>/1.json, <folder>/2.json, ... in number order. The folder defaults to maps.
 Floodfill is run again so the coral tops match the saved quests.
+Maps written by evaluate.py also carry original_heightmap, the terrain before the agent edited it.
 '''
-def load_maps():
-    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps")
+def load_maps(folder_name="maps"):
+    folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), folder_name)
     names = [name for name in os.listdir(folder) if name.endswith(".json") and name[:-5].isdigit()]
     names.sort(key=lambda name: int(name[:-5]))
 
@@ -22,27 +24,37 @@ def load_maps():
         with open(os.path.join(folder, name), encoding="utf-8") as f:
             raw = json.load(f)
 
-        heightmap = np.array(raw["heightmap"], dtype=np.int32)
-        spawn = tuple(raw["spawn"])
-        main_quest = tuple(raw["main_quest"])
-        side_quests = [tuple(cell) for cell in raw["side_quests"]]
-
-        visited = floodfill(heightmap, spawn)
-        reached_sides = [cell for cell in side_quests if cell in visited]
-
-        batch.append({
+        item = {
             "id": raw["id"],
             "seed": raw["seed"],
-            "heightmap": heightmap,
-            "spawn": spawn,
-            "main_quest": main_quest,
-            "side_quests": side_quests,
+            "spawn": tuple(raw["spawn"]),
+            "main_quest": tuple(raw["main_quest"]),
+            "side_quests": [tuple(cell) for cell in raw["side_quests"]],
             "demand": raw["requested_reachable"],
-            "visited": visited,
-            "reached_sides": reached_sides,
-            "main_reached": main_quest in visited,
-        })
+            "edited_heightmap": np.array(raw["heightmap"], dtype=np.int32),
+            "original_heightmap": None,
+        }
+        if "original_heightmap" in raw:
+            item["original_heightmap"] = np.array(raw["original_heightmap"], dtype=np.int32)
+        batch.append(item)
     return batch
+
+
+'''
+The item drawn on screen: the chosen heightmap with its floodfill and reached quests worked out.
+'''
+def shown_version(item, show_original):
+    use_original = show_original and item["original_heightmap"] is not None
+    heightmap = item["original_heightmap"] if use_original else item["edited_heightmap"]
+    visited = floodfill(heightmap, item["spawn"])
+    shown = dict(item)
+    shown["heightmap"] = heightmap
+    shown["visited"] = visited
+    shown["reached_sides"] = [cell for cell in item["side_quests"] if cell in visited]
+    shown["main_reached"] = item["main_quest"] in visited
+    if item["original_heightmap"] is not None:
+        shown["version"] = "original" if use_original else "edited"
+    return shown
 
 
 # Marker pins are circles. The two block colors are squares.
@@ -70,10 +82,12 @@ def add_color_legend(plotter, size):
 def blurb(item):
     placed = len(item["side_quests"])
     got = len(item["reached_sides"])
-    met = "met" if got >= item["demand"] else "missed"
+    # Too many reachable side quests misses the demand just like too few
+    met = "met" if got == item["demand"] else "missed"
     main_txt = "main ok" if item["main_reached"] else "main blocked"
+    version = f"  [{item['version']}]" if "version" in item else ""
     return (
-        f"maps/{item['id']}.json  seed {item['seed']}  demand {item['demand']} ({met})\n"
+        f"map {item['id']}  seed {item['seed']}  demand {item['demand']} ({met}){version}\n"
         f"sides {placed} placed, {got} reached, {main_txt}"
     )
 
@@ -150,13 +164,15 @@ def aim_camera(plotter, heightmap):
 
 
 class Browser:
-    def __init__(self):
+    def __init__(self, folder_name="maps"):
         self.index = 0
         self.together = False
         self.switching = False
+        self.show_original = False
         self.plotter = None
-        self.batch = load_maps()
-        print(f"Loaded {len(self.batch)} maps from maps/")
+        self.folder_name = folder_name
+        self.batch = load_maps(folder_name)
+        print(f"Loaded {len(self.batch)} maps from {folder_name}/")
 
     def make_plotter(self):
         if self.together:
@@ -168,6 +184,7 @@ class Browser:
         plotter.add_key_event("Right", self.on_next)
         plotter.add_key_event("a", self.on_mode)
         plotter.add_key_event("n", self.on_new)
+        plotter.add_key_event("b", self.on_before_after)
         return plotter
 
     def draw(self):
@@ -180,7 +197,7 @@ class Browser:
                 plotter.subplot(slot // 4, slot % 4)
                 plotter.set_background("white")
                 if slot < len(page):
-                    item = page[slot]
+                    item = shown_version(page[slot], self.show_original)
                     add_heightmap(plotter, item, font_size=8)
                     aim_camera(plotter, item["heightmap"])
             for row in range(3):
@@ -190,20 +207,20 @@ class Browser:
             add_color_legend(plotter, size=(0.92, 0.86))
             plotter.subplot(0, 4)
             plotter.add_text(
-                "left/right  one map\na  back to one\nn  reload maps",
+                "left/right  one map\na  back to one\nn  reload maps\nb  before/after edits",
                 position="upper_left",
                 font_size=12,
                 color="black",
             )
             plotter.link_views()
         else:
-            item = self.batch[self.index]
+            item = shown_version(self.batch[self.index], self.show_original)
             add_heightmap(plotter, item, font_size=13)
             aim_camera(plotter, item["heightmap"])
             add_color_legend(plotter, size=(0.24, 0.28))
             plotter.add_text(
                 f"map {self.index + 1}/{len(self.batch)}    "
-                "left/right  next map    a  page of 12    n  reload",
+                "left/right  next map    a  page of 12    n  reload    b  before/after",
                 position="lower_left",
                 font_size=11,
                 color="black",
@@ -230,11 +247,16 @@ class Browser:
         self.plotter.close()
 
     def on_new(self):
-        self.batch = load_maps()
-        print(f"Loaded {len(self.batch)} maps from maps/")
+        self.batch = load_maps(self.folder_name)
+        print(f"Loaded {len(self.batch)} maps from {self.folder_name}/")
         if not self.batch:
             return
         self.index = min(self.index, len(self.batch) - 1)
+        self.draw()
+
+    # Only maps written by evaluate.py have an original to switch to
+    def on_before_after(self):
+        self.show_original = not self.show_original
         self.draw()
 
     def run(self):
@@ -248,8 +270,11 @@ class Browser:
 
 
 if __name__ == "__main__":
-    browser = Browser()
+    # python map_browser.py              the generated maps
+    # python map_browser.py maps_edited  the agent's edits, b switches to the original
+    folder_name = sys.argv[1] if len(sys.argv) > 1 else "maps"
+    browser = Browser(folder_name)
     if browser.batch:
         browser.run()
     else:
-        print("No maps in the maps folder. Run bulk_generate.py first.")
+        print(f"No maps in the {folder_name} folder. Run bulk_generate.py or evaluate.py first.")
