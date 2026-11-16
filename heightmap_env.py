@@ -8,21 +8,20 @@ from heightmap import MAX_HEIGHT
 from path_finding import floodfill_stop
 
 MAP_SIZE = 16
-MAX_SIDE_QUESTS = 5
 MAX_EDITS = 500
-STEP_COST = 0.02
-SUCCESS_BONUS = 2.0  # paid once on the edit that solves the map, so finishing beats fiddling
-LAST_TRAIN_ID = 80  # maps 1..80 train, 81..100 test
+STEP_COST = 0.1
+MAIN_QUEST_REWARD = 10.0  # connecting the main quest, or losing it, is worth this much
+SUCCESS_BONUS = 10.0  # paid once on the edit that solves the map
 
 LOWER = 0
 RAISE = 1
 
 
 '''
-Reads maps/<id>.json and keeps the train ids or the test ids.
+Reads every numbered json map in the folder, in id order.
 Maps asking for more side quests than were placed can never be solved, so they are skipped.
 '''
-def load_split(folder, split):
+def load_maps(folder):
     records = []
     skipped = 0
     for name in os.listdir(folder):
@@ -31,9 +30,6 @@ def load_split(folder, split):
         with open(os.path.join(folder, name), encoding="utf-8") as f:
             raw = json.load(f)
 
-        in_train = raw["id"] <= LAST_TRAIN_ID
-        if in_train != (split == "train"):
-            continue
         if raw["requested_reachable"] > len(raw["side_quests"]):
             skipped += 1
             continue
@@ -46,11 +42,24 @@ def load_split(folder, split):
             "main_quest": tuple(raw["main_quest"]),
             "side_quests": [tuple(cell) for cell in raw["side_quests"]],
             "requested_side_count": raw["requested_reachable"],
+            # Saved by the generator with the plain flood fill, same value PQN starts from
+            "saved_main_reached": bool(raw["main_reachable"]),
         })
     records.sort(key=lambda record: record["id"])
     if skipped:
-        print(f"{split}: skipped {skipped} maps that ask for more side quests than were placed")
+        print(f"skipped {skipped} maps that ask for more side quests than were placed")
     return records
+
+
+'''
+Same cut as pqn.py: shuffle with the run seed, hold out eval_fraction for testing.
+'''
+def split_maps(records, seed, eval_fraction):
+    order = np.random.default_rng(seed).permutation(len(records))
+    num_eval = max(1, int(round(len(records) * eval_fraction)))
+    test_records = [records[i] for i in order[:num_eval]]
+    train_records = [records[i] for i in order[num_eval:]]
+    return train_records, test_records
 
 
 class HeightmapEnv(gym.Env):
@@ -67,7 +76,7 @@ class HeightmapEnv(gym.Env):
         self.next_record_index = 0
 
         self.action_space = gym.spaces.Discrete(2 * MAP_SIZE * MAP_SIZE)
-        self.observation_space = gym.spaces.Box(0.0, 1.0, (7, MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(-10.0, 10.0, (5, MAP_SIZE, MAP_SIZE), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -86,6 +95,8 @@ class HeightmapEnv(gym.Env):
 
         self.update_reachability()
         self.start_side_count = self.side_count
+        # PQN starts this from the flag stored in the json, not from floodfill_stop
+        self.main_reward_tracker = self.record["saved_main_reached"]
         return self.observation(), self.info()
 
     def step(self, action):
@@ -96,12 +107,15 @@ class HeightmapEnv(gym.Env):
         self.edits_made += 1
 
         side_miss_before = abs(self.side_count - self.requested_side_count)
-        main_before = self.main_reached
+        main_before = self.main_reward_tracker
         self.update_reachability()
         side_miss_after = abs(self.side_count - self.requested_side_count)
 
         # Reaching too many side quests is punished the same as reaching too few
-        reward = (side_miss_before - side_miss_after) + (int(self.main_reached) - int(main_before)) - STEP_COST
+        reward = (side_miss_before - side_miss_after) - STEP_COST
+        if self.main_reached != main_before:
+            reward += MAIN_QUEST_REWARD if self.main_reached else -MAIN_QUEST_REWARD
+            self.main_reward_tracker = self.main_reached
 
         solved = self.is_solved()
         if solved:
@@ -121,17 +135,14 @@ class HeightmapEnv(gym.Env):
         return self.main_reached and self.side_count == self.requested_side_count
 
     def observation(self):
-        planes = np.zeros((7, MAP_SIZE, MAP_SIZE), dtype=np.float32)
-        planes[0] = self.heightmap / MAX_HEIGHT
+        # Same five planes as PQNEnv: raw height, spawn, main quest, side quests, requested count
+        planes = np.zeros((5, MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        planes[0] = self.heightmap
         planes[1][self.spawn] = 1.0
         planes[2][self.main_quest] = 1.0
         for cell in self.side_quests:
             planes[3][cell] = 1.0
-        for cell in self.reachable_cells:
-            planes[4][cell] = 1.0
-        for cell in self.side_quests_reached:
-            planes[5][cell] = 1.0
-        planes[6][:] = self.requested_side_count / MAX_SIDE_QUESTS
+        planes[4][:] = self.requested_side_count
         return planes
 
     def action_mask(self):

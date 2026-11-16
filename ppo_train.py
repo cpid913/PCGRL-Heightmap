@@ -15,7 +15,7 @@ from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
 
 # heightmap: our environment instead of a registered gym one
-from heightmap_env import HeightmapEnv, load_split
+from heightmap_env import HeightmapEnv, load_maps, split_maps
 
 
 @dataclass
@@ -76,6 +76,8 @@ class Args:
     # heightmap: where the maps live and how often to try the test maps
     maps_folder: str = "maps"
     """folder with the numbered map json files"""
+    eval_fraction: float = 0.2
+    """fraction of maps held out for testing, shuffled with the run seed"""
     eval_every: int = 50_000
     """run the test maps every this many steps and keep the best model"""
 
@@ -205,10 +207,11 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
-    # heightmap: load the train and test maps
-    train_records = load_split(args.maps_folder, "train")
-    test_records = load_split(args.maps_folder, "test")
-    print(f"{len(train_records)} train maps, {len(test_records)} test maps")
+    # heightmap: same shuffle-and-holdout as pqn.py, so a shared seed tests the same maps
+    records = load_maps(args.maps_folder)
+    train_records, test_records = split_maps(records, args.seed, args.eval_fraction)
+    test_ids = ", ".join(str(record["id"]) for record in test_records)
+    print(f"{len(train_records)} train maps, {len(test_records)} test maps: {test_ids}")
 
     # env setup
     # heightmap: SAME_STEP reset matches the older gym behavior this file was written for

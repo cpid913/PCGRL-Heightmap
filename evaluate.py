@@ -6,26 +6,29 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-from heightmap_env import HeightmapEnv, load_split
+from heightmap_env import HeightmapEnv, load_maps, split_maps
 from ppo_train import Agent, play_map_greedily
 
 '''
 Plays every test map with a trained agent and writes the edited maps to maps_edited/.
-Usage: python evaluate.py runs/<run_name>/agent.pt [maps folder]
+Usage: python evaluate.py runs/<run_name>/agent.pt [maps folder] [seed]
+The seed must be the one used in training, so the held-out maps are the same ones.
 '''
 def main():
     if len(sys.argv) < 2:
-        print("usage: python evaluate.py runs/<run_name>/agent.pt [maps folder]")
+        print("usage: python evaluate.py runs/<run_name>/agent.pt [maps folder] [seed]")
         return
     checkpoint_path = sys.argv[1]
     maps_folder = sys.argv[2] if len(sys.argv) > 2 else "maps"
+    seed = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     output_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "maps_edited")
     os.makedirs(output_folder, exist_ok=True)
     for name in os.listdir(output_folder):
         if name.endswith(".json") and name[:-5].isdigit():
             os.remove(os.path.join(output_folder, name))
 
-    test_records = load_split(maps_folder, "test")
+    _, test_records = split_maps(load_maps(maps_folder), seed, eval_fraction=0.2)
+    print("test maps:", ", ".join(str(record["id"]) for record in test_records))
     env = HeightmapEnv(test_records, fixed_order=True)
 
     # Agent only reads the observation and action sizes from this
