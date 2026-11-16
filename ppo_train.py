@@ -154,25 +154,64 @@ class Agent(nn.Module):
 # heightmap: play one map with the most likely legal edit each step, no sampling
 def play_map_greedily(agent, env, device):
     observation, info = env.reset()
+    episodic_return = 0.0
     finished = False
+    terminated = False
     while not finished:
         with torch.no_grad():
             observation_tensor = torch.Tensor(observation).unsqueeze(0).to(device)
             mask_tensor = torch.tensor(info["action_mask"]).unsqueeze(0).to(device)
             action = agent.masked_logits(observation_tensor, mask_tensor).argmax(dim=1).item()
-        observation, _, terminated, truncated, info = env.step(action)
+        observation, reward, terminated, truncated, info = env.step(action)
+        episodic_return += reward
         finished = terminated or truncated
-    return info
+    # Same fields pqn.evaluate records for one map
+    return {
+        "map_id": info["map_id"],
+        "return": episodic_return,
+        "length": info["edits_made"],
+        "terminated": bool(terminated),
+        "main_reachable": bool(info["main_reached"]),
+        "side_reached": info["side_count"],
+        "side_target": info["requested_side_count"],
+        "side_error": info["side_count"] - info["requested_side_count"],
+    }
 
 
-# heightmap: fraction of test maps the agent solves
+# heightmap: one greedy episode on every test map
 def evaluate_on_test_maps(agent, test_records, device):
+    was_training = agent.training
+    agent.eval()
     env = HeightmapEnv(test_records, fixed_order=True)
-    solved = 0
-    for _ in test_records:
-        final_info = play_map_greedily(agent, env, device)
-        solved += final_info["success"]
-    return solved / len(test_records)
+    results = [play_map_greedily(agent, env, device) for _ in test_records]
+    agent.train(was_training)
+    return results
+
+
+# heightmap: same summary pqn.py prints after its held-out eval
+def score_eval(results):
+    scores = {
+        "success_rate": float(np.mean([r["terminated"] for r in results])),
+        "main_success_rate": float(np.mean([r["main_reachable"] for r in results])),
+        "side_success_rate": float(np.mean([r["side_error"] == 0 for r in results])),
+        "side_mae": float(np.mean([abs(r["side_error"]) for r in results])),
+        "mean_return": float(np.mean([r["return"] for r in results])),
+        "mean_length": float(np.mean([r["length"] for r in results])),
+    }
+    failed = [r for r in results if not r["terminated"]]
+    if failed:
+        errors = np.array([r["side_error"] for r in failed])
+        scores["failed_side_abs_error"] = float(np.abs(errors).mean())
+        scores["failed_side_signed_error"] = float(errors.mean())
+    return scores
+
+
+def format_eval(results, scores):
+    return (
+        f"EVAL on {len(results)} held-out maps: success_rate={scores['success_rate']:.2%}, "
+        f"main_success_rate={scores['main_success_rate']:.2%}, side_success_rate={scores['side_success_rate']:.2%}, "
+        f"side_mae={scores['side_mae']:.2f}, mean_return={scores['mean_return']:.2f}, mean_length={scores['mean_length']:.1f}"
+    )
 
 
 if __name__ == "__main__":
@@ -383,11 +422,14 @@ if __name__ == "__main__":
         # heightmap: try the test maps now and then, keep the model that solves the most
         if global_step - last_eval_step >= args.eval_every or iteration == args.num_iterations:
             last_eval_step = global_step
-            test_success = evaluate_on_test_maps(agent, test_records, device)
-            writer.add_scalar("charts/test_success", test_success, global_step)
-            print(f"global_step={global_step}, test_success={test_success:.2f}")
-            if test_success > best_test_success:
-                best_test_success = test_success
+            results = evaluate_on_test_maps(agent, test_records, device)
+            scores = score_eval(results)
+            for name, value in scores.items():
+                writer.add_scalar(f"eval/{name}", value, global_step)
+            writer.add_scalar("charts/test_success", scores["success_rate"], global_step)
+            print(f"global_step={global_step}, {format_eval(results, scores)}")
+            if scores["success_rate"] > best_test_success:
+                best_test_success = scores["success_rate"]
                 torch.save(agent.state_dict(), f"runs/{run_name}/agent.pt")
                 print(f"saved runs/{run_name}/agent.pt")
 

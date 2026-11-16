@@ -3,11 +3,10 @@ import os
 import sys
 
 import gymnasium as gym
-import numpy as np
 import torch
 
 from heightmap_env import HeightmapEnv, load_maps, split_maps
-from ppo_train import Agent, play_map_greedily
+from ppo_train import Agent, format_eval, play_map_greedily, score_eval
 
 '''
 Plays every test map with a trained agent and writes the edited maps to maps_edited/.
@@ -37,27 +36,19 @@ def main():
     agent.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
     agent.eval()
 
-    solved_count = 0
-    edits_per_map = []
-    side_misses = []
+    results = []
     print(f"{'map':>4} {'start':>5} {'end':>4} {'want':>4} {'main':>5} {'solved':>6} {'edits':>5}")
     for record in test_records:
-        final_info = play_map_greedily(agent, env, torch.device("cpu"))
-        solved = final_info["success"]
-        solved_count += solved
-        edits_per_map.append(env.edits_made)
-        side_misses.append(abs(env.side_count - env.requested_side_count))
-
+        result = play_map_greedily(agent, env, torch.device("cpu"))
+        results.append(result)
         print(
-            f"{record['id']:>4} {env.start_side_count:>5} {env.side_count:>4} {env.requested_side_count:>4} "
-            f"{str(env.main_reached):>5} {str(solved):>6} {env.edits_made:>5}"
+            f"{record['id']:>4} {env.start_side_count:>5} {result['side_reached']:>4} {result['side_target']:>4} "
+            f"{str(result['main_reachable']):>5} {str(result['terminated']):>6} {result['length']:>5}"
         )
         save_edited_map(output_folder, record, env)
 
     print()
-    print(f"solved {solved_count}/{len(test_records)} ({solved_count / len(test_records):.0%})")
-    print(f"average edits {np.mean(edits_per_map):.1f}")
-    print(f"average side quest miss |reached - requested| {np.mean(side_misses):.2f}")
+    print(format_eval(results, score_eval(results)))
     print(f"edited maps written to {output_folder}")
 
 
