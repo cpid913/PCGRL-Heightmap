@@ -9,7 +9,7 @@ from path_finding import floodfill_stop
 
 MAP_SIZE = 16
 MAX_SIDE_QUESTS = 5
-MAX_EDITS = 256
+MAX_EDITS = 500
 STEP_COST = 0.02
 SUCCESS_BONUS = 2.0  # paid once on the edit that solves the map, so finishing beats fiddling
 LAST_TRAIN_ID = 80  # maps 1..80 train, 81..100 test
