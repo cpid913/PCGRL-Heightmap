@@ -1,5 +1,6 @@
 """
 Code from https://github.com/vwxyzjn/cleanrl with modification to fit this project
+Used Claude for debugging
 """
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/pqn/#pqnpy
 import os
@@ -118,6 +119,20 @@ class QNetwork(nn.Module):
         return self.network(x)
 
 
+def valid_action_mask(obs):
+    """obs: (B, C, 16, 16) tensor, channel 0 = raw heightmap (1..8).
+    Returns a (B, 512) bool mask: actions 0-255 raise a cell (valid if height < 8),
+    256-511 lower a cell (valid if height > 1). Row-major, so action a -> cell (a // 16, a % 16),
+    matching PQNEnv.step. If the heightmap channel is ever rescaled, update these thresholds."""
+    h = obs[:, 0].reshape(obs.shape[0], -1)
+    return torch.cat([h < 8, h > 1], dim=1)
+
+
+def masked_q(q_values, mask):
+    """Invalid actions get -inf so max/argmax only ever consider valid actions."""
+    return q_values.masked_fill(~mask, float("-inf"))
+
+
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
@@ -133,17 +148,24 @@ def evaluate(q_network, eval_maps, device):
         episodic_return, length, done = 0.0, 0, False
         while not done:
             with torch.no_grad():
-                q_values = q_network(torch.Tensor(obs).unsqueeze(0).to(device))
+                obs_t = torch.Tensor(obs).unsqueeze(0).to(device)
+                q_values = masked_q(q_network(obs_t), valid_action_mask(obs_t))
             action = int(torch.argmax(q_values, dim=1).item())
-            obs, reward, terminated, truncated, _ = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action)
             episodic_return += reward
             length += 1
             done = terminated or truncated
+        # Final state of the episode
         results.append({
             "map_id": eval_maps[map_idx]["id"],
             "return": episodic_return,
             "length": length,
             "terminated": bool(terminated),
+            "main_reachable": info["main_reachable"],
+            "side_reached": info["side_reached"],
+            "side_target": info["side_target"],
+            # signed: > 0 means too many side quests reachable, < 0 means too few
+            "side_error": info["side_reached"] - info["side_target"],
         })
     q_network.train()
     return results
@@ -227,9 +249,12 @@ if __name__ == "__main__":
             dones[step] = next_done
 
             epsilon = linear_schedule(args.start_e, args.end_e, args.exploration_fraction * args.total_timesteps, global_step)
-            random_actions = torch.randint(0, envs.single_action_space.n, (args.num_envs,)).to(device)
+            # Mask is recomputed every step from the current heightmap in the observation
+            mask = valid_action_mask(next_obs)
+            # Explore uniformly over valid actions only
+            random_actions = torch.multinomial(mask.float(), 1).squeeze(1)
             with torch.no_grad():
-                q_values = q_network(next_obs)
+                q_values = masked_q(q_network(next_obs), mask)
                 max_actions = torch.argmax(q_values, dim=1)
                 values[step] = q_values[torch.arange(args.num_envs), max_actions].flatten()
 
@@ -257,7 +282,8 @@ if __name__ == "__main__":
             returns = torch.zeros_like(rewards).to(device)
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
-                    next_value, _ = torch.max(q_network(next_obs), dim=-1)
+                    # Bootstrap with the best *valid* action; other steps reuse values[t + 1], already masked
+                    next_value, _ = torch.max(masked_q(q_network(next_obs), valid_action_mask(next_obs)), dim=-1)
                     nextnonterminal = 1.0 - next_done
                     returns[t] = rewards[t] + args.gamma * next_value * nextnonterminal
                 else:
@@ -292,7 +318,6 @@ if __name__ == "__main__":
 
         writer.add_scalar("losses/td_loss", loss, global_step)
         writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
-        print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
     envs.close()
@@ -308,13 +333,31 @@ if __name__ == "__main__":
         writer.add_scalar("eval/episodic_return", r["return"], i)
         writer.add_scalar("eval/episodic_length", r["length"], i)
         writer.add_scalar("eval/terminated", int(r["terminated"]), i)
+        writer.add_scalar("eval/main_reachable", int(r["main_reachable"]), i)
+        writer.add_scalar("eval/side_error", r["side_error"], i)
     success_rate = np.mean([r["terminated"] for r in results])
+    main_success_rate = np.mean([r["main_reachable"] for r in results])
+    side_success_rate = np.mean([r["side_error"] == 0 for r in results])
+    # MAE over all episodes: mean |reached - requested| side quests
+    side_mae = np.mean([abs(r["side_error"]) for r in results])
     mean_return = np.mean([r["return"] for r in results])
     mean_length = np.mean([r["length"] for r in results])
     writer.add_scalar("eval/success_rate", success_rate, global_step)
+    writer.add_scalar("eval/main_success_rate", main_success_rate, global_step)
+    writer.add_scalar("eval/side_success_rate", side_success_rate, global_step)
+    writer.add_scalar("eval/side_mae", side_mae, global_step)
     writer.add_scalar("eval/mean_return", mean_return, global_step)
     writer.add_scalar("eval/mean_length", mean_length, global_step)
     print(f"EVAL on {len(results)} held-out maps: success_rate={success_rate:.2%}, "
+          f"main_success_rate={main_success_rate:.2%}, side_success_rate={side_success_rate:.2%}, side_mae={side_mae:.2f}, "
           f"mean_return={mean_return:.2f}, mean_length={mean_length:.1f}")
+
+    # How far off the side quest count is, among episodes that did not fully succeed
+    failed = [r for r in results if not r["terminated"]]
+    if failed:
+        errors = np.array([r["side_error"] for r in failed])
+        mean_abs_error = np.abs(errors).mean()
+        writer.add_scalar("eval/failed_side_abs_error", mean_abs_error, global_step)
+        writer.add_scalar("eval/failed_side_signed_error", errors.mean(), global_step)
 
     writer.close()

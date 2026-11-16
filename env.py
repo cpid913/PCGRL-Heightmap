@@ -3,15 +3,16 @@ import numpy as np
 from path_finding import floodfill, floodfill_stop
 from main import show_heightmap
 '''
-Environment class for pqn (with template code generated from Claude)
+Environment class for pqn (written based on a template code generated from Claude)
+Used Claude for debugging
 '''
 class PQNEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, maps, max_steps=1000):
+    def __init__(self, maps, max_steps=500):
         super().__init__()
         self.maps = maps
-        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(4,16,16), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(5,16,16), dtype=np.float32)
         self.action_space = gym.spaces.Discrete(512)
         self.max_steps = max_steps
         self.t = 0
@@ -20,7 +21,7 @@ class PQNEnv(gym.Env):
     Observation includes: current heightmap, location of the spawn, location of the main quest, location of the side quests
     '''
     def _obs(self):
-        return np.array([self.current_heightmap, self.mask_spawn, self.mask_main_quest, self.mask_side_quests], dtype=np.float32)
+        return np.array([self.current_heightmap, self.mask_spawn, self.mask_main_quest, self.mask_side_quests, self.demand_map], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -60,6 +61,7 @@ class PQNEnv(gym.Env):
         reached_sides = [cell for cell in self.side_quests if cell in visited]
         self.current_diff_side_quests = abs(self.target_side_quests - len(reached_sides))
         self.current_main_reachable = self.current_map["main_reached"]
+        self.demand_map = np.full((16, 16), self.target_side_quests)
         return self._obs(), {"map_idx": int(idx)}
 
     def step(self, action):
@@ -79,7 +81,8 @@ class PQNEnv(gym.Env):
         main_reachable = float(self.main_quest in visited)
         diff_side = abs(self.target_side_quests - len(reached_sides))
         # Start calculating reward
-        reward = 0
+        # Small penalty at each step to encourage fewer steps
+        reward = -0.1
 
         # Reward if the number of side quests is closer to the target, penalize if the number of side quests is farther than the target
         reward += (self.current_diff_side_quests - diff_side)
@@ -94,4 +97,9 @@ class PQNEnv(gym.Env):
             reward += 10
         truncated = self.t >= self.max_steps
 
-        return self._obs(), reward, terminated, truncated, {}
+        info = {
+            "main_reachable": bool(main_reachable),
+            "side_reached": len(reached_sides),
+            "side_target": self.target_side_quests,
+        }
+        return self._obs(), reward, terminated, truncated, info
