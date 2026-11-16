@@ -11,3 +11,5 @@ _pycache_/
 *.pywz
 *.pyzw
 *.pyz
+runs/
+maps_edited/

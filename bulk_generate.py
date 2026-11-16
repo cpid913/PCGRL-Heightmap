@@ -22,8 +22,8 @@ def maps_dir():
     return folder
 
 '''
-One try. requested_reachable is how many side quests we hoped the player
-could reach, random from 0 to the number of side quests actually placed.
+One try. requested_reachable is how many side quests we hoped the player could reach.
+It is drawn after the quests are placed so it never asks for more side quests than exist.
 '''
 def roll_map(seed):
     rng = np.random.default_rng(seed)
@@ -32,6 +32,7 @@ def roll_map(seed):
     # place_quests prints, and most of these maps are thrown away
     with redirect_stdout(StringIO()):
         spawn, main_quest, side_quests = place_quests(heightmap, rng)
+    wanted = int(rng.integers(0, len(side_quests) + 1))
 
     wanted = int(rng.integers(0, len(side_quests) + 1))
 
