@@ -1,5 +1,6 @@
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/ppo/#ppopy
 # Copied from CleanRL's ppo.py (untouched copy in cleanrl_ppo_original.py). Changes for the heightmap are marked "heightmap:".
+import csv
 import os
 import random
 import time
@@ -212,6 +213,41 @@ def format_eval(results, scores):
         f"main_success_rate={scores['main_success_rate']:.2%}, side_success_rate={scores['side_success_rate']:.2%}, "
         f"side_mae={scores['side_mae']:.2f}, mean_return={scores['mean_return']:.2f}, mean_length={scores['mean_length']:.1f}"
     )
+
+
+# heightmap: one row per test-map check, same columns as the eval print plus the failed-map side errors
+EVAL_CSV_COLUMNS = [
+    "step",
+    "success_rate",
+    "main_success_rate",
+    "side_success_rate",
+    "side_mae",
+    "mean_return",
+    "mean_length",
+    "failed_side_abs_error",
+    "failed_side_signed_error",
+]
+
+
+def append_eval_csv(path, step, scores):
+    new_file = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        out = csv.writer(f)
+        if new_file:
+            out.writerow(EVAL_CSV_COLUMNS)
+        row = [step]
+        for name in EVAL_CSV_COLUMNS[1:]:
+            if name not in scores:
+                row.append("")
+                continue
+            value = scores[name]
+            if name.endswith("success_rate"):
+                row.append(f"{value * 100:.2f}")
+            elif name == "mean_length":
+                row.append(f"{value:.1f}")
+            else:
+                row.append(f"{value:.2f}")
+        out.writerow(row)
 
 
 # heightmap: folder name is "run 1 2026-11-15 19-19", next free number and the local start time
@@ -441,6 +477,7 @@ if __name__ == "__main__":
                 writer.add_scalar(f"eval/{name}", value, global_step)
             writer.add_scalar("charts/test_success", scores["success_rate"], global_step)
             print(f"global_step={global_step}, {format_eval(results, scores)}")
+            append_eval_csv(f"runs/{run_name}/evals.csv", global_step, scores)
             if scores["success_rate"] > best_test_success:
                 best_test_success = scores["success_rate"]
                 torch.save(agent.state_dict(), f"runs/{run_name}/agent.pt")
