@@ -214,12 +214,25 @@ def format_eval(results, scores):
     )
 
 
+# heightmap: folder name is "run 1 2026-11-15 19-19", next free number and the local start time
+def next_run_name():
+    os.makedirs("runs", exist_ok=True)
+    used = []
+    for name in os.listdir("runs"):
+        parts = name.split(" ")
+        if len(parts) >= 2 and parts[0] == "run" and parts[1].isdigit():
+            used.append(int(parts[1]))
+    number = max(used, default=0) + 1
+    started = time.strftime("%Y-%m-%d %H-%M")
+    return f"run {number} {started}"
+
+
 if __name__ == "__main__":
     args = tyro.cli(Args)
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
     args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
+    run_name = next_run_name()  # heightmap
     if args.track:
         import wandb
 
