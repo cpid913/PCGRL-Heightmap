@@ -5,12 +5,13 @@ import gymnasium as gym
 import numpy as np
 
 from heightmap import MAX_HEIGHT
-from path_finding import floodfill
+from path_finding import floodfill_stop
 
 MAP_SIZE = 16
 MAX_SIDE_QUESTS = 5
 MAX_EDITS = 256
-STEP_COST = 0.01
+STEP_COST = 0.02
+SUCCESS_BONUS = 2.0  # paid once on the edit that solves the map, so finishing beats fiddling
 LAST_TRAIN_ID = 80  # maps 1..80 train, 81..100 test
 
 LOWER = 0
@@ -103,11 +104,15 @@ class HeightmapEnv(gym.Env):
         reward = (side_miss_before - side_miss_after) + (int(self.main_reached) - int(main_before)) - STEP_COST
 
         solved = self.is_solved()
+        if solved:
+            reward += SUCCESS_BONUS
         out_of_edits = self.edits_made >= MAX_EDITS and not solved
         return self.observation(), float(reward), solved, out_of_edits, self.info()
 
     def update_reachability(self):
-        self.reachable_cells = floodfill(self.heightmap, self.spawn)
+        # Spreads out from spawn and stops at the step it reaches the main quest,
+        # so a side quest counts only if the player gets there no later than the main quest
+        self.reachable_cells = floodfill_stop(self.heightmap, self.spawn, self.main_quest)
         self.side_quests_reached = [cell for cell in self.side_quests if cell in self.reachable_cells]
         self.side_count = len(self.side_quests_reached)
         self.main_reached = self.main_quest in self.reachable_cells

@@ -6,7 +6,7 @@ from io import StringIO
 import numpy as np
 
 from heightmap import generate_heightmap
-from path_finding import floodfill
+from path_finding import floodfill_stop
 from quest_placement import place_quests
 
 MAP_SIZE = 16
@@ -34,9 +34,8 @@ def roll_map(seed):
         spawn, main_quest, side_quests = place_quests(heightmap, rng)
     wanted = int(rng.integers(0, len(side_quests) + 1))
 
-    wanted = int(rng.integers(0, len(side_quests) + 1))
-
-    walked = floodfill(heightmap, spawn)
+    # Side quests only count if the player gets to them no later than the main quest
+    walked = floodfill_stop(heightmap, spawn, main_quest)
     reached = [cell for cell in side_quests if cell in walked]
     main_reachable = main_quest in walked
     return heightmap, spawn, main_quest, side_quests, wanted, reached, main_reachable

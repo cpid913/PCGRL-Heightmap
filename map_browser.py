@@ -5,7 +5,7 @@ import sys
 import numpy as np
 import pyvista as pv
 
-from path_finding import floodfill, floodfill_stop
+from path_finding import floodfill_stop
 
 PAGE = 12
 
@@ -46,7 +46,7 @@ The item drawn on screen: the chosen heightmap with its floodfill and reached qu
 def shown_version(item, show_original):
     use_original = show_original and item["original_heightmap"] is not None
     heightmap = item["original_heightmap"] if use_original else item["edited_heightmap"]
-    visited = floodfill(heightmap, item["spawn"])
+    visited = floodfill_stop(heightmap, item["spawn"], item["main_quest"])
     shown = dict(item)
     shown["heightmap"] = heightmap
     shown["visited"] = visited
