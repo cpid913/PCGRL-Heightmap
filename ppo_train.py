@@ -179,12 +179,12 @@ def play_map_greedily(agent, env, device):
     }
 
 
-# heightmap: one greedy episode on every test map
-def evaluate_on_test_maps(agent, test_records, device):
+# heightmap: one greedy episode on every map in the list
+def evaluate_maps(agent, records, device):
     was_training = agent.training
     agent.eval()
-    env = HeightmapEnv(test_records, fixed_order=True)
-    results = [play_map_greedily(agent, env, device) for _ in test_records]
+    env = HeightmapEnv(records, fixed_order=True)
+    results = [play_map_greedily(agent, env, device) for _ in records]
     agent.train(was_training)
     return results
 
@@ -207,9 +207,9 @@ def score_eval(results):
     return scores
 
 
-def format_eval(results, scores):
+def format_eval(results, scores, split="held-out"):
     return (
-        f"EVAL on {len(results)} held-out maps: success_rate={scores['success_rate']:.2%}, "
+        f"EVAL on {len(results)} {split} maps: success_rate={scores['success_rate']:.2%}, "
         f"main_success_rate={scores['main_success_rate']:.2%}, side_success_rate={scores['side_success_rate']:.2%}, "
         f"side_mae={scores['side_mae']:.2f}, mean_return={scores['mean_return']:.2f}, mean_length={scores['mean_length']:.1f}"
     )
@@ -468,20 +468,25 @@ if __name__ == "__main__":
         print("SPS:", int(global_step / (time.time() - start_time)))
         writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
 
-        # heightmap: try the test maps now and then, keep the model that solves the most
+        # heightmap: score the held-out maps and the training maps, and keep the model that solves the most held-out maps
         if global_step - last_eval_step >= args.eval_every or iteration == args.num_iterations:
             last_eval_step = global_step
-            results = evaluate_on_test_maps(agent, test_records, device)
-            scores = score_eval(results)
-            for name, value in scores.items():
-                writer.add_scalar(f"eval/{name}", value, global_step)
-            writer.add_scalar("charts/test_success", scores["success_rate"], global_step)
-            print(f"global_step={global_step}, {format_eval(results, scores)}")
-            append_eval_csv(f"runs/{run_name}/evals.csv", global_step, scores)
-            if scores["success_rate"] > best_test_success:
-                best_test_success = scores["success_rate"]
-                torch.save(agent.state_dict(), f"runs/{run_name}/agent.pt")
-                print(f"saved runs/{run_name}/agent.pt")
+            for split, records, csv_name, chart_prefix in (
+                ("held-out", test_records, "test_evals.csv", "eval"),
+                ("train", train_records, "train_evals.csv", "train_eval"),
+            ):
+                results = evaluate_maps(agent, records, device)
+                scores = score_eval(results)
+                for name, value in scores.items():
+                    writer.add_scalar(f"{chart_prefix}/{name}", value, global_step)
+                print(f"global_step={global_step}, {format_eval(results, scores, split)}")
+                append_eval_csv(f"runs/{run_name}/{csv_name}", global_step, scores)
+                if split == "held-out":
+                    writer.add_scalar("charts/test_success", scores["success_rate"], global_step)
+                    if scores["success_rate"] > best_test_success:
+                        best_test_success = scores["success_rate"]
+                        torch.save(agent.state_dict(), f"runs/{run_name}/agent.pt")
+                        print(f"saved runs/{run_name}/agent.pt")
 
     envs.close()
     writer.close()
