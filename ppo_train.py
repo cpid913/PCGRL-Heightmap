@@ -40,13 +40,13 @@ class Args:
     # Algorithm specific arguments
     env_id: str = "Heightmap-v0"  # heightmap: only used in the run name
     """the id of the environment"""
-    total_timesteps: int = 1_000_000
+    total_timesteps: int = 500000
     """total timesteps of the experiments"""
-    learning_rate: float = 3e-4  # heightmap
+    learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 8
+    num_envs: int = 4
     """the number of parallel game environments"""
-    num_steps: int = 256
+    num_steps: int = 128
     """the number of steps to run in each environment per policy rollout"""
     anneal_lr: bool = True
     """Toggle learning rate annealing for policy and value networks"""
@@ -56,7 +56,7 @@ class Args:
     """the lambda for the general advantage estimation"""
     num_minibatches: int = 4
     """the number of mini-batches"""
-    update_epochs: int = 10  # heightmap: few maps, so squeeze more out of each rollout
+    update_epochs: int = 4
     """the K epochs to update the policy"""
     norm_adv: bool = True
     """Toggles advantages normalization"""
@@ -64,7 +64,7 @@ class Args:
     """the surrogate clipping coefficient"""
     clip_vloss: bool = True
     """Toggles whether or not to use a clipped loss for the value function, as per the paper."""
-    ent_coef: float = 0.02  # heightmap: a bit more exploration over 512 actions
+    ent_coef: float = 0.01
     """coefficient of the entropy"""
     vf_coef: float = 0.5
     """coefficient of the value function"""
