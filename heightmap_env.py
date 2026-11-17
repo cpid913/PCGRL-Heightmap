@@ -76,7 +76,7 @@ class HeightmapEnv(gym.Env):
         self.next_record_index = 0
 
         self.action_space = gym.spaces.Discrete(2 * MAP_SIZE * MAP_SIZE)
-        self.observation_space = gym.spaces.Box(-10.0, 10.0, (5, MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(-10.0, 10.0, (6, MAP_SIZE, MAP_SIZE), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -135,14 +135,17 @@ class HeightmapEnv(gym.Env):
         return self.main_reached and self.side_count == self.requested_side_count
 
     def observation(self):
-        # Same five planes as PQNEnv: raw height, spawn, main quest, side quests, requested count
-        planes = np.zeros((5, MAP_SIZE, MAP_SIZE), dtype=np.float32)
+        # Keep the five baseline planes, then expose the current floodfill_stop region.
+        # Reachability is already updated on reset and after every edit; reuse it here.
+        planes = np.zeros((6, MAP_SIZE, MAP_SIZE), dtype=np.float32)
         planes[0] = self.heightmap
         planes[1][self.spawn] = 1.0
         planes[2][self.main_quest] = 1.0
         for cell in self.side_quests:
             planes[3][cell] = 1.0
         planes[4][:] = self.requested_side_count
+        for cell in self.reachable_cells:
+            planes[5][cell] = 1.0
         return planes
 
     def action_mask(self):
