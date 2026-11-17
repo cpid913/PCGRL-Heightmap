@@ -19,8 +19,7 @@ import tyro
 from torch.utils.tensorboard import SummaryWriter
 
 from env import PQNEnv
-from evaluate import evaluate, log_eval, masked_q, split_maps, valid_action_mask
-from map_browser import load_maps
+from evaluate_pqn import evaluate, load_pqn_maps, log_eval, masked_q, split_maps, valid_action_mask
 
 @dataclass
 class Args:
@@ -200,7 +199,7 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # Train/eval split: shuffle once with the run seed, hold out eval_fraction of the maps
-    train_maps, eval_maps = split_maps(load_maps(), args.split_seed, args.eval_fraction)
+    train_maps, eval_maps = split_maps(load_pqn_maps(), args.split_seed, args.eval_fraction)
     print(f"maps: {len(train_maps)} train / {len(eval_maps)} eval")
     writer.add_text("eval_map_ids", ", ".join(str(m["id"]) for m in eval_maps))
     # So evaluate.py can use exactly the same held-out maps

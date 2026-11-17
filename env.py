@@ -12,7 +12,7 @@ class PQNEnv(gym.Env):
     def __init__(self, maps, max_steps=500):
         super().__init__()
         self.maps = maps
-        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(6,16,16), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=0, high=8, shape=(6,16,16), dtype=np.float32)
         self.action_space = gym.spaces.Discrete(512)
         self.max_steps = max_steps
         self.t = 0

@@ -5,9 +5,9 @@ Greedy evaluation for the PQN heightmap agent.
 Used two ways:
   1. Imported by pqn.py for the final evaluation after training.
   2. Run on its own, while training is still going, on the checkpoints pqn.py saves:
-       python evaluate.py runs/<run_name>             # evaluate all checkpoints so far
-       python evaluate.py runs/<run_name> --watch     # keep evaluating new checkpoints until training ends
-       python evaluate.py runs/<run_name> --model best_model.pt   # evaluate one saved model (per-map results)
+       python evaluate_pqn.py runs/<run_name>             # evaluate all checkpoints so far
+       python evaluate_pqn.py runs/<run_name> --watch     # keep evaluating new checkpoints until training ends
+       python evaluate_pqn.py runs/<run_name> --model best_model.pt   # evaluate one saved model (per-map results)
      Results are printed and logged to TensorBoard under runs/<run_name>/eval_offline.
 """
 import glob
@@ -23,6 +23,7 @@ import torch
 import tyro
 
 from env import PQNEnv
+from path_finding import floodfill_stop
 
 
 def valid_action_mask(obs):
@@ -37,6 +38,19 @@ def valid_action_mask(obs):
 def masked_q(q_values, mask):
     """Invalid actions get -inf so max/argmax only ever consider valid actions."""
     return q_values.masked_fill(~mask, float("-inf"))
+
+
+def load_pqn_maps():
+    """The maps in the format PQNEnv expects. Reuses map_browser.load_maps and adds the two keys
+    the env needs: 'heightmap' (the map's terrain) and 'main_reached' (main quest reachable at the start)."""
+    from map_browser import load_maps
+    maps = []
+    for item in load_maps():
+        m = dict(item)
+        m["heightmap"] = item["edited_heightmap"]  # for maps/ this is just the map's heightmap
+        m["main_reached"] = m["main_quest"] in floodfill_stop(m["heightmap"], m["spawn"], m["main_quest"])
+        maps.append(m)
+    return maps
 
 
 def split_maps(maps, seed, eval_fraction):
@@ -88,6 +102,11 @@ def evaluate(q_network, eval_maps, device):
                 # How much the map was edited: initial vs final heightmap
                 "cells_changed": int((env.current_heightmap != env.initial_heightmap).sum()),
                 "height_change": int(np.abs(env.current_heightmap.astype(int) - env.initial_heightmap.astype(int)).sum()),
+                # Split of height_change: blocks added (cells that ended higher) and removed (cells that ended lower)
+                "height_added": int(np.clip(env.current_heightmap.astype(int) - env.initial_heightmap.astype(int), 0, None).sum()),
+                "height_removed": int(np.clip(env.initial_heightmap.astype(int) - env.current_heightmap.astype(int), 0, None).sum()),
+                # The edited map itself, for view_policy.py
+                "final_heightmap": env.current_heightmap.copy(),
             }
         active = still_active
     q_network.train(was_training)
@@ -115,10 +134,14 @@ def log_eval(writer, results, global_step, per_map=False):
     writer.add_scalar("eval/side_mae", side_mae, global_step)
     mean_cells_changed = np.mean([r["cells_changed"] for r in results])
     mean_height_change = np.mean([r["height_change"] for r in results])
+    # Totals over all eval maps (added + removed = total height change)
+    total_height_added = sum(r["height_added"] for r in results)
+    total_height_removed = sum(r["height_removed"] for r in results)
     print(f"EVAL step {global_step} on {len(results)} held-out maps: success_rate={success_rate:.2%}, "
           f"main_success_rate={main_success_rate:.2%}, side_success_rate={side_success_rate:.2%}, side_mae={side_mae:.2f}, "
           f"mean_return={mean_return:.2f}, mean_length={mean_length:.1f}, "
-          f"mean_cells_changed={mean_cells_changed:.1f}, mean_height_change={mean_height_change:.1f}")
+          f"mean_cells_changed={mean_cells_changed:.1f}, mean_height_change={mean_height_change:.1f}, "
+          f"total_height_added={total_height_added}, total_height_removed={total_height_removed}")
 
 
 # ---------------------------------------------------------------- standalone use
@@ -147,8 +170,7 @@ def checkpoint_step(path):
 
 
 def load_eval_maps(args):
-    from map_browser import load_maps
-    maps = load_maps()
+    maps = load_pqn_maps()
     ids_path = os.path.join(args.run_dir, "eval_maps.json")
     if os.path.exists(ids_path):
         with open(ids_path, encoding="utf-8") as f:
@@ -174,7 +196,8 @@ def evaluate_single(args, q_network, eval_maps, device, SummaryWriter):
     results = evaluate(q_network, eval_maps, device)
     for r in results:
         print(f"  map {r['map_id']}: terminated={r['terminated']}, main_reachable={r['main_reachable']}, "
-              f"side {r['side_reached']}/{r['side_target']}, length={r['length']}, return={r['return']:.2f}")
+              f"side {r['side_reached']}/{r['side_target']}, length={r['length']}, return={r['return']:.2f}, "
+              f"added={r['height_added']}, removed={r['height_removed']}")
     writer = SummaryWriter(os.path.join(args.run_dir, "eval_offline", os.path.splitext(os.path.basename(args.model))[0]))
     log_eval(writer, results, step, per_map=True)
     writer.close()
