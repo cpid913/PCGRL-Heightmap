@@ -12,16 +12,16 @@ class PQNEnv(gym.Env):
     def __init__(self, maps, max_steps=500):
         super().__init__()
         self.maps = maps
-        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(5,16,16), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-10.0, high=10.0, shape=(6,16,16), dtype=np.float32)
         self.action_space = gym.spaces.Discrete(512)
         self.max_steps = max_steps
         self.t = 0
 
     '''
-    Observation includes: current heightmap, location of the spawn, location of the main quest, location of the side quests
+    Observation includes: current heightmap, location of the spawn, location of the main quest, location of the side quests, target number of reached side quests and exploration area
     '''
     def _obs(self):
-        return np.array([self.current_heightmap, self.mask_spawn, self.mask_main_quest, self.mask_side_quests, self.demand_map], dtype=np.float32)
+        return np.array([self.current_heightmap, self.mask_spawn, self.mask_main_quest, self.mask_side_quests, self.demand_map, self.exploration_area], dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -57,6 +57,10 @@ class PQNEnv(gym.Env):
         self.t = 0
 
         visited = floodfill_stop(self.current_heightmap, self.spawn, self.main_quest)
+        exploration_area = np.zeros_like(self.current_heightmap, dtype=np.float32)
+        xs, ys = zip(*visited)
+        exploration_area[list(xs), list(ys)] = 1
+        self.exploration_area = exploration_area
         self.initial_visited = visited
         reached_sides = [cell for cell in self.side_quests if cell in visited]
         self.current_diff_side_quests = abs(self.target_side_quests - len(reached_sides))
@@ -77,6 +81,12 @@ class PQNEnv(gym.Env):
         self.t += 1
 
         visited = floodfill_stop(self.current_heightmap, self.spawn, self.main_quest)
+        # Update exploration area
+        exploration_area = np.zeros_like(self.current_heightmap, dtype=np.float32)
+        xs, ys = zip(*visited)
+        exploration_area[list(xs), list(ys)] = 1
+        self.exploration_area = exploration_area
+
         reached_sides = [cell for cell in self.side_quests if cell in visited]
         main_reachable = float(self.main_quest in visited)
         diff_side = abs(self.target_side_quests - len(reached_sides))

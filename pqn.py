@@ -3,6 +3,7 @@ Code from https://github.com/vwxyzjn/cleanrl with modification to fit this proje
 Used Claude for debugging
 """
 # docs and experiment results can be found at https://docs.cleanrl.dev/rl-algorithms/pqn/#pqnpy
+import json
 import os
 import random
 import time
@@ -18,14 +19,17 @@ import tyro
 from torch.utils.tensorboard import SummaryWriter
 
 from env import PQNEnv
+from evaluate import evaluate, log_eval, masked_q, split_maps, valid_action_mask
 from map_browser import load_maps
 
 @dataclass
 class Args:
     exp_name: str = os.path.basename(__file__)[: -len(".py")]
     """the name of this experiment"""
+    split_seed: int = 67
+    """seed for train/valid split"""
     seed: int = 1
-    """seed of the experiment"""
+    """seed of the training experiment"""
     torch_deterministic: bool = True
     """if toggled, `torch.backends.cudnn.deterministic=False`"""
     cuda: bool = True
@@ -46,9 +50,9 @@ class Args:
     """total timesteps of the experiments"""
     learning_rate: float = 2.5e-4
     """the learning rate of the optimizer"""
-    num_envs: int = 4
+    num_envs: int = 16
     """the number of parallel game environments"""
-    num_steps: int = 128
+    num_steps: int = 32
     """the number of steps to run for each environment per update"""
     num_minibatches: int = 4
     """the number of mini-batches"""
@@ -70,6 +74,10 @@ class Args:
     """the lambda for Q(lambda)"""
     eval_fraction: float = 0.2
     """fraction of maps held out for evaluation after training"""
+    checkpoint_every: int = 50000
+    """save a checkpoint to runs/<run>/checkpoints every this many timesteps (0 = only at the end)"""
+    eval_every: int = 10000
+    """run a greedy evaluation on the held-out maps every this many timesteps and log eval/* (0 = only at the end)"""
 
 
 def make_env(env_id, maps, seed, idx, capture_video, run_name):
@@ -119,56 +127,44 @@ class QNetwork(nn.Module):
         return self.network(x)
 
 
-def valid_action_mask(obs):
-    """obs: (B, C, 16, 16) tensor, channel 0 = raw heightmap (1..8).
-    Returns a (B, 512) bool mask: actions 0-255 raise a cell (valid if height < 8),
-    256-511 lower a cell (valid if height > 1). Row-major, so action a -> cell (a // 16, a % 16),
-    matching PQNEnv.step. If the heightmap channel is ever rescaled, update these thresholds."""
-    h = obs[:, 0].reshape(obs.shape[0], -1)
-    return torch.cat([h < 8, h > 1], dim=1)
-
-
-def masked_q(q_values, mask):
-    """Invalid actions get -inf so max/argmax only ever consider valid actions."""
-    return q_values.masked_fill(~mask, float("-inf"))
-
-
 def linear_schedule(start_e: float, end_e: float, duration: int, t: int):
     slope = (end_e - start_e) / duration
     return max(slope * t + start_e, end_e)
 
 
-def evaluate(q_network, eval_maps, device):
-    """Run one greedy (epsilon = 0) episode on every eval map. Returns a list of per-map results."""
-    env = PQNEnv(eval_maps)
-    q_network.eval()
-    results = []
-    for map_idx in range(len(eval_maps)):
-        obs, _ = env.reset(options={"map_idx": map_idx})
-        episodic_return, length, done = 0.0, 0, False
-        while not done:
-            with torch.no_grad():
-                obs_t = torch.Tensor(obs).unsqueeze(0).to(device)
-                q_values = masked_q(q_network(obs_t), valid_action_mask(obs_t))
-            action = int(torch.argmax(q_values, dim=1).item())
-            obs, reward, terminated, truncated, info = env.step(action)
-            episodic_return += reward
-            length += 1
-            done = terminated or truncated
-        # Final state of the episode
-        results.append({
-            "map_id": eval_maps[map_idx]["id"],
-            "return": episodic_return,
-            "length": length,
-            "terminated": bool(terminated),
-            "main_reachable": info["main_reachable"],
-            "side_reached": info["side_reached"],
-            "side_target": info["side_target"],
-            # signed: > 0 means too many side quests reachable, < 0 means too few
-            "side_error": info["side_reached"] - info["side_target"],
-        })
-    q_network.train()
-    return results
+def crossed(global_step, every, batch_size):
+    """True once each time global_step passes a multiple of `every` (steps advance by batch_size per iteration)."""
+    return every > 0 and global_step // every > (global_step - batch_size) // every
+
+
+def save_atomic(q_network, path):
+    """Write to a temp file first so evaluate.py --watch never reads a half-written checkpoint."""
+    torch.save(q_network.state_dict(), path + ".tmp")
+    os.replace(path + ".tmp", path)
+
+
+def save_checkpoint(q_network, run_name, global_step):
+    folder = f"runs/{run_name}/checkpoints"
+    os.makedirs(folder, exist_ok=True)
+    save_atomic(q_network, os.path.join(folder, f"step_{global_step}.pt"))
+
+
+def save_if_best(q_network, run_name, results, global_step, best):
+    """Save runs/<run>/best_model.pt when this evaluation beats the best so far, ranked by:
+    1. higher success_rate, 2. higher main_success_rate, 3. lower side_mae; if all three tie, the earlier model is kept.
+    `best` is a dict carried across evaluations; best_model.json records which step it came from."""
+    success_rate = float(np.mean([r["terminated"] for r in results]))
+    main_success_rate = float(np.mean([r["main_reachable"] for r in results]))
+    side_mae = float(np.mean([abs(r["side_error"]) for r in results]))
+    # Tuples compare field by field; side_mae is negated so that "bigger is better" holds for every field
+    if (success_rate, main_success_rate, -side_mae) <= (best["success_rate"], best["main_success_rate"], -best["side_mae"]):
+        return
+    best.update(success_rate=success_rate, main_success_rate=main_success_rate, side_mae=side_mae, step=global_step)
+    save_atomic(q_network, f"runs/{run_name}/best_model.pt")
+    with open(f"runs/{run_name}/best_model.json", "w", encoding="utf-8") as f:
+        json.dump(best, f, indent=2)
+    print(f"new best model at step {global_step}: success_rate={success_rate:.2%}, "
+          f"main_success_rate={main_success_rate:.2%}, side_mae={side_mae:.2f}")
 
 
 if __name__ == "__main__":
@@ -204,13 +200,12 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
 
     # Train/eval split: shuffle once with the run seed, hold out eval_fraction of the maps
-    maps = load_maps()
-    perm = np.random.default_rng(args.seed).permutation(len(maps))
-    num_eval = max(1, int(round(len(maps) * args.eval_fraction)))
-    eval_maps = [maps[i] for i in perm[:num_eval]]
-    train_maps = [maps[i] for i in perm[num_eval:]]
+    train_maps, eval_maps = split_maps(load_maps(), args.split_seed, args.eval_fraction)
     print(f"maps: {len(train_maps)} train / {len(eval_maps)} eval")
     writer.add_text("eval_map_ids", ", ".join(str(m["id"]) for m in eval_maps))
+    # So evaluate.py can use exactly the same held-out maps
+    with open(f"runs/{run_name}/eval_maps.json", "w", encoding="utf-8") as f:
+        json.dump({"eval_map_ids": [int(m["id"]) for m in eval_maps]}, f)
 
     # env setup
     envs = gym.vector.SyncVectorEnv(
@@ -232,6 +227,9 @@ if __name__ == "__main__":
     # TRY NOT TO MODIFY: start the game
     global_step = 0
     start_time = time.time()
+    eval_seconds = 0.0
+    # Best evaluation so far; worst-possible start values so the first evaluation always saves a best_model.pt
+    best = {"success_rate": -1.0, "main_success_rate": -1.0, "side_mae": float("inf"), "step": None}
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
@@ -318,46 +316,35 @@ if __name__ == "__main__":
 
         writer.add_scalar("losses/td_loss", loss, global_step)
         writer.add_scalar("losses/q_values", old_val.mean().item(), global_step)
-        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time)), global_step)
+        # SPS excludes time spent in periodic evaluation, so it still measures training speed
+        writer.add_scalar("charts/SPS", int(global_step / (time.time() - start_time - eval_seconds)), global_step)
+
+        # Periodic checkpoint for evaluate.py (fires once each time global_step crosses a multiple)
+        if crossed(global_step, args.checkpoint_every, args.batch_size):
+            save_checkpoint(q_network, run_name, global_step)
+
+        # Periodic greedy evaluation on the held-out maps -> eval/main_success_rate, eval/side_mae, ... vs global_step
+        # (skipped on the last iteration: the final evaluation below logs that step)
+        if crossed(global_step, args.eval_every, args.batch_size) and iteration < args.num_iterations:
+            eval_start = time.time()
+            results = evaluate(q_network, eval_maps, device)
+            log_eval(writer, results, global_step)
+            save_if_best(q_network, run_name, results, global_step, best)
+            eval_seconds += time.time() - eval_start
 
     envs.close()
 
-    # Save the trained model so it can be re-evaluated later
+    # Final checkpoint first, then model.pt (evaluate.py --watch stops once model.pt exists)
+    save_checkpoint(q_network, run_name, global_step)
     model_path = f"runs/{run_name}/model.pt"
     torch.save(q_network.state_dict(), model_path)
     print(f"model saved to {model_path}")
 
     # Evaluate on held-out maps
     results = evaluate(q_network, eval_maps, device)
-    for i, r in enumerate(results):
-        writer.add_scalar("eval/episodic_return", r["return"], i)
-        writer.add_scalar("eval/episodic_length", r["length"], i)
-        writer.add_scalar("eval/terminated", int(r["terminated"]), i)
-        writer.add_scalar("eval/main_reachable", int(r["main_reachable"]), i)
-        writer.add_scalar("eval/side_error", r["side_error"], i)
-    success_rate = np.mean([r["terminated"] for r in results])
-    main_success_rate = np.mean([r["main_reachable"] for r in results])
-    side_success_rate = np.mean([r["side_error"] == 0 for r in results])
-    # MAE over all episodes: mean |reached - requested| side quests
-    side_mae = np.mean([abs(r["side_error"]) for r in results])
-    mean_return = np.mean([r["return"] for r in results])
-    mean_length = np.mean([r["length"] for r in results])
-    writer.add_scalar("eval/success_rate", success_rate, global_step)
-    writer.add_scalar("eval/main_success_rate", main_success_rate, global_step)
-    writer.add_scalar("eval/side_success_rate", side_success_rate, global_step)
-    writer.add_scalar("eval/side_mae", side_mae, global_step)
-    writer.add_scalar("eval/mean_return", mean_return, global_step)
-    writer.add_scalar("eval/mean_length", mean_length, global_step)
-    print(f"EVAL on {len(results)} held-out maps: success_rate={success_rate:.2%}, "
-          f"main_success_rate={main_success_rate:.2%}, side_success_rate={side_success_rate:.2%}, side_mae={side_mae:.2f}, "
-          f"mean_return={mean_return:.2f}, mean_length={mean_length:.1f}")
-
-    # How far off the side quest count is, among episodes that did not fully succeed
-    failed = [r for r in results if not r["terminated"]]
-    if failed:
-        errors = np.array([r["side_error"] for r in failed])
-        mean_abs_error = np.abs(errors).mean()
-        writer.add_scalar("eval/failed_side_abs_error", mean_abs_error, global_step)
-        writer.add_scalar("eval/failed_side_signed_error", errors.mean(), global_step)
+    log_eval(writer, results, global_step, per_map=True)
+    save_if_best(q_network, run_name, results, global_step, best)
+    print(f"best model: step {best['step']}, success_rate={best['success_rate']:.2%}, "
+          f"main_success_rate={best['main_success_rate']:.2%}, side_mae={best['side_mae']:.2f} -> runs/{run_name}/best_model.pt")
 
     writer.close()
